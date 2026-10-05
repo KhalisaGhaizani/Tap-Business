@@ -1,0 +1,21 @@
+@import 'tailwindcss';
+
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, sans-serif;
+  background: #f8fafc;
+  color: #0f172a;
+  -webkit-font-smoothing: antialiased;
+}
+
+@keyframes nfc-wave {
+  0% { transform: scale(0.6); opacity: 0.9; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+.nfc-wave { animation: nfc-wave 1.2s ease-out infinite; }
+
+@keyframes slide-down {
+  from { transform: translateY(-120%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.slide-down { animation: slide-down 0.4s ease-out both; }
