@@ -1,0 +1,58 @@
+# Production stack. Lives in DEPLOY_PATH on the server next to a .env file
+# (see deploy/.env.example); the GitHub Actions deploy workflows copy it there.
+name: tapbusiness
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tapbusiness
+      POSTGRES_USER: tapbusiness
+      # demo setup: no password. The port isn't published, so only containers
+      # on this compose network (i.e. the backend) can connect.
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tapbusiness -d tapbusiness"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    image: ${BACKEND_IMAGE:-ghcr.io/khalisaghaizani/tap-business-backend}:${BACKEND_TAG:-latest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://tapbusiness@db:5432/tapbusiness
+      APP_URL: ${APP_URL:-https://${DOMAIN:?Set DOMAIN in .env}}
+      UPLOAD_DIR: /data/uploads
+      TRUST_PROXY: "true"
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    image: ${WEB_IMAGE:-ghcr.io/khalisaghaizani/tap-business-web}:${WEB_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "1080:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  uploads:
+  caddy_data:
+  caddy_config:

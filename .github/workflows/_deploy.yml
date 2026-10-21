@@ -1,0 +1,143 @@
+# Reusable: build one service's Docker image, push it to GHCR, then pull and
+# restart it on the server over SSH. Called by deploy-backend.yml and deploy-frontend.yml.
+name: Deploy service
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: Compose service name (backend or web)
+        required: true
+        type: string
+      dockerfile:
+        required: true
+        type: string
+
+jobs:
+  image:
+    name: Build & push image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      name: ${{ steps.name.outputs.image }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: name
+        # image names must be lowercase; e.g. ghcr.io/owner/tap-business-backend
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}-${{ inputs.service }}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ inputs.dockerfile }}
+          push: true
+          tags: |
+            ${{ steps.name.outputs.image }}:latest
+            ${{ steps.name.outputs.image }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ inputs.service }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.service }}
+
+  deploy:
+    name: Deploy to server
+    needs: image
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.DOMAIN && format('https://{0}', vars.DOMAIN) || '' }}
+    # one deploy at a time across both services; never cancel one halfway
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: read
+    env:
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_PORT: ${{ vars.SSH_PORT || '22' }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/tapbusiness' }}
+      SERVICE: ${{ inputs.service }}
+      # a variable is easier to read in logs, but a secret works too
+      DOMAIN: ${{ vars.DOMAIN || secrets.DOMAIN }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ -n "$SSH_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            echo "::warning::SSH_KNOWN_HOSTS is not set; trusting the host key found now"
+            ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+          cat > ~/.ssh/config <<CONFIG
+          Host server
+            HostName $SSH_HOST
+            User $SSH_USER
+            Port $SSH_PORT
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+          CONFIG
+
+      - name: Upload compose file and .env
+        env:
+          ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          ADMIN_NAME: ${{ vars.ADMIN_NAME || 'Admin' }}
+          TIMEZONE: ${{ vars.TIMEZONE || 'Asia/Jakarta' }}
+        run: |
+          for name in DOMAIN ADMIN_EMAIL ADMIN_PASSWORD; do
+            if [ -z "${!name}" ]; then echo "::error::Add $name to the production environment in GitHub"; exit 1; fi
+            # values are written single-quoted, which can't contain a single quote
+            if [[ "${!name}" == *"'"* ]]; then echo "::error::$name must not contain a single quote (')"; exit 1; fi
+          done
+          # shellcheck disable=SC2029 # variables are meant to expand here, before ssh
+          ssh server "mkdir -p '$DEPLOY_PATH'"
+          scp deploy/docker-compose.yml "server:$DEPLOY_PATH/docker-compose.yml"
+          # regenerated on every deploy; sent over stdin so secrets never appear in a command line
+          # shellcheck disable=SC2029 # variables are meant to expand here, before ssh
+          printf "DOMAIN='%s'\nADMIN_EMAIL='%s'\nADMIN_PASSWORD='%s'\nADMIN_NAME='%s'\nTIMEZONE='%s'\n" \
+            "$DOMAIN" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" "$ADMIN_NAME" "$TIMEZONE" |
+            ssh server "umask 077 && cat > '$DEPLOY_PATH/.env'"
+
+      - name: Pull and restart ${{ inputs.service }}
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+        run: |
+          prefix="${IMAGE_PREFIX,,}"
+          # the token is sent over stdin so it never shows up in the server's process list
+          # shellcheck disable=SC2029 # variables are meant to expand here, before ssh
+          printf '%s' "$GHCR_TOKEN" | ssh server "
+            set -e
+            cd '$DEPLOY_PATH'
+            export BACKEND_IMAGE='$prefix-backend' WEB_IMAGE='$prefix-web'
+            docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+            docker compose pull '$SERVICE'
+            docker compose up -d db
+            docker compose up -d --no-deps '$SERVICE'
+            docker logout ghcr.io
+            docker image prune -f
+          "
+
+      - name: Check the site responds
+        run: |
+          for _ in $(seq 1 20); do
+            if curl -fsS "https://$DOMAIN/api/health"; then exit 0; fi
+            sleep 6
+          done
+          echo "::error::https://$DOMAIN/api/health did not respond after deploy"
+          exit 1

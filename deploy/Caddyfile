@@ -1,0 +1,29 @@
+# DOMAIN comes from the server's .env. Caddy gets and renews the HTTPS
+# certificate automatically. Use DOMAIN=:80 to serve plain HTTP (e.g. locally).
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Same paths the Vite dev server proxies
+	@backend path /api/* /uploads/* /c/*
+	handle @backend {
+		reverse_proxy backend:3000
+	}
+
+	handle {
+		root * /srv
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		@pages not path /assets/*
+		header @pages Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "SAMEORIGIN"
+		-Server
+	}
+}
