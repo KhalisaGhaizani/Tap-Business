@@ -39,20 +39,13 @@ services:
   web:
     image: ${WEB_IMAGE:-ghcr.io/khalisaghaizani/tap-business-web}:${WEB_TAG:-latest}
     restart: unless-stopped
+    # Only reachable from the server itself; the host's Caddy serves the domain
+    # over HTTPS and forwards to this port (see README, "Reverse proxy").
     ports:
-      - "1080:80"
-      - "443:443"
-      - "443:443/udp"
-    environment:
-      DOMAIN: ${DOMAIN}
-    volumes:
-      - caddy_data:/data
-      - caddy_config:/config
+      - "127.0.0.1:${WEB_PORT:-8080}:80"
     depends_on:
       - backend
 
 volumes:
   pgdata:
   uploads:
-  caddy_data:
-  caddy_config:

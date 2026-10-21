@@ -1,6 +1,14 @@
-# DOMAIN comes from the server's .env. Caddy gets and renews the HTTPS
-# certificate automatically. Use DOMAIN=:80 to serve plain HTTP (e.g. locally).
-{$DOMAIN} {
+# Runs inside the web container behind the server's own reverse proxy (Caddy on
+# the host), which terminates HTTPS for the domain and forwards plain HTTP here.
+{
+	servers {
+		# keep the visitor's IP from the host proxy's X-Forwarded-For, so the
+		# backend's rate limits apply per visitor rather than to everyone at once
+		trusted_proxies static private_ranges
+	}
+}
+
+:80 {
 	encode zstd gzip
 
 	# Same paths the Vite dev server proxies
@@ -20,7 +28,6 @@
 	}
 
 	header {
-		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		X-Frame-Options "SAMEORIGIN"

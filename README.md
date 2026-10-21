@@ -79,11 +79,24 @@ Two workflows deploy to a single Linux server running Docker:
 
 Each runs the CI checks (typecheck, tests against Postgres, build) and then builds a Docker image. It pushes the image to GitHub Container Registry (`ghcr.io/<owner>/<repo>-backend` / `-web`) and SSHes into the server to pull and restart that one service. Both can also be started by hand from the Actions tab (**Run workflow**). CI also runs on pull requests and other branches.
 
-On the server, [Caddy](https://caddyserver.com) serves the frontend, gets an HTTPS certificate automatically and forwards `/api`, `/uploads` and `/c` to the backend. Postgres data and uploaded images live in Docker volumes.
+On the server, the `web` container (Caddy) serves the frontend and forwards `/api`, `/uploads` and `/c` to the backend. It listens only on `127.0.0.1:8080`; the server's own reverse proxy owns ports 80/443, handles HTTPS for the domain and forwards to it:
+
+```
+Internet ──443──▶ host Caddy (HTTPS) ──▶ 127.0.0.1:8080 web container ──▶ backend
+```
+
+Postgres data and uploaded images live in Docker volumes.
 
 ### One-time setup
 
 1. **Server**: any VPS with Docker and the compose plugin, ports 80 and 443 open. Point your domain's DNS A record at it.
+   **Reverse proxy**: with Caddy installed on the server, add this to `/etc/caddy/Caddyfile` and run `sudo systemctl reload caddy`. Caddy gets the HTTPS certificate on its own:
+   ```
+   tapbusiness.example.com {
+   	reverse_proxy 127.0.0.1:8080
+   }
+   ```
+   If port 8080 is taken on the server, set the `WEB_PORT` variable in GitHub and use that port here instead.
 2. **Deploy user**: create a user that may run Docker (in the `docker` group), and add the public half of a new SSH key to its `~/.ssh/authorized_keys`.
 3. **Deploy folder**: `sudo mkdir -p /opt/tapbusiness && sudo chown deploy: /opt/tapbusiness`
 4. **GitHub** → Settings → Environments → create `production`, then add:
@@ -99,6 +112,7 @@ On the server, [Caddy](https://caddyserver.com) serves the frontend, gets an HTT
    | Secret | `ADMIN_PASSWORD` | Password of the first admin (no single quotes) |
    | Variable | `ADMIN_NAME` | Optional, default `Admin` |
    | Variable | `TIMEZONE` | Optional, default `Asia/Jakarta` |
+   | Variable | `WEB_PORT` | Optional, local port for the web container, default `8080` |
    | Variable | `SSH_PORT` | Optional, default `22` |
    | Variable | `DEPLOY_PATH` | Optional, default `/opt/tapbusiness` |
 

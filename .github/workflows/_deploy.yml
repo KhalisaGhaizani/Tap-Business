@@ -98,6 +98,7 @@ jobs:
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           ADMIN_NAME: ${{ vars.ADMIN_NAME || 'Admin' }}
           TIMEZONE: ${{ vars.TIMEZONE || 'Asia/Jakarta' }}
+          WEB_PORT: ${{ vars.WEB_PORT || '8080' }}
         run: |
           for name in DOMAIN ADMIN_EMAIL ADMIN_PASSWORD; do
             if [ -z "${!name}" ]; then echo "::error::Add $name to the production environment in GitHub"; exit 1; fi
@@ -109,8 +110,8 @@ jobs:
           scp deploy/docker-compose.yml "server:$DEPLOY_PATH/docker-compose.yml"
           # regenerated on every deploy; sent over stdin so secrets never appear in a command line
           # shellcheck disable=SC2029 # variables are meant to expand here, before ssh
-          printf "DOMAIN='%s'\nADMIN_EMAIL='%s'\nADMIN_PASSWORD='%s'\nADMIN_NAME='%s'\nTIMEZONE='%s'\n" \
-            "$DOMAIN" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" "$ADMIN_NAME" "$TIMEZONE" |
+          printf "DOMAIN='%s'\nADMIN_EMAIL='%s'\nADMIN_PASSWORD='%s'\nADMIN_NAME='%s'\nTIMEZONE='%s'\nWEB_PORT='%s'\n" \
+            "$DOMAIN" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" "$ADMIN_NAME" "$TIMEZONE" "$WEB_PORT" |
             ssh server "umask 077 && cat > '$DEPLOY_PATH/.env'"
 
       - name: Pull and restart ${{ inputs.service }}
